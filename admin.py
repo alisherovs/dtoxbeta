@@ -10,21 +10,26 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton, 
     FSInputFile, CallbackQuery, ReplyKeyboardRemove
 )
+from dotenv import load_dotenv
 import database as db
+
+# .env faylini chaqiramiz (agar main.py da chaqirilmagan bo'lsa, xavfsizlik uchun)
+load_dotenv()
 
 admin_router = Router()
 
 # ==========================================================
-#     ADMIN XAVFSIZLIK FILTRI (Faqat admin uchun ishlaydi)
+#     ADMIN XAVFSIZLIK FILTRI (Mukammal versiya)
 # ==========================================================
-try:
-    ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
-except ValueError:
-    ADMIN_ID = 0
+# .env dagi ADMIN_ID ni o'qiymiz (Masalan: "8008006509, 8008157657")
+ADMIN_ID_RAW = os.getenv("ADMIN_ID", "")
 
-# Ushbu routerdagi barcha message va callbacklar faqat ADMIN_ID ga ishlaydi!
-admin_router.message.filter(F.from_user.id == ADMIN_ID)
-admin_router.callback_query.filter(F.from_user.id == ADMIN_ID)
+# Vergul bilan ajratilgan raqamlarni tozalab, ro'yxatga (list) aylantiramiz
+ADMIN_IDS = [int(i.strip()) for i in ADMIN_ID_RAW.split(",") if i.strip().isdigit()]
+
+# Ushbu routerdagi barcha message va callbacklar FAQAT shu ro'yxatdagi adminlarga ishlaydi!
+admin_router.message.filter(F.from_user.id.in_(ADMIN_IDS))
+admin_router.callback_query.filter(F.from_user.id.in_(ADMIN_IDS))
 
 # --- 1. STATES (HOLATLAR) ---
 class AdminState(StatesGroup):
@@ -98,11 +103,14 @@ def day_actions_kb(course, day):
 
 # --- 3. ASOSIY START ---
 
-# Admin /start ni bosa avtomatik shu yerga tushadi
 @admin_router.message(Command("start", "admin"))
 async def admin_start(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("👨‍💼 **Admin Panel**\nXush kelibsiz, Admin! Barcha bo'limlar ishga tayyor.", reply_markup=admin_home_kb(), parse_mode="Markdown")
+    await message.answer(
+        "👨‍💼 <b>Admin Panel</b>\nXush kelibsiz, Admin! Barcha bo'limlar ishga tayyor.", 
+        reply_markup=admin_home_kb(), 
+        parse_mode="HTML"
+    )
 
 @admin_router.message(F.text == "🔙 Asosiy Menyu")
 async def back_to_home(message: types.Message, state: FSMContext):
@@ -125,9 +133,11 @@ async def show_users_page(message_or_call, page):
     
     if not users:
         text = "✅ <b>Ajoyib! Yangi arizalar mavjud emas.</b>\nBarcha so'rovlar ko'rib chiqilgan."
-        if is_message: await message_or_call.answer(text, parse_mode="HTML")
+        if is_message: 
+            await message_or_call.answer(text, parse_mode="HTML")
         else: 
-            try: await message_or_call.message.edit_text(text, parse_mode="HTML")
+            try: 
+                await message_or_call.message.edit_text(text, parse_mode="HTML")
             except: 
                 await message_or_call.message.delete()
                 await message_or_call.message.answer(text, parse_mode="HTML")
@@ -151,15 +161,21 @@ async def show_users_page(message_or_call, page):
         ])
     
     nav_row = []
-    if page > 1: nav_row.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data=f"users_page_{page-1}"))
-    if page < total_pages: nav_row.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data=f"users_page_{page+1}"))
-    if nav_row: kb_rows.append(nav_row)
+    if page > 1: 
+        nav_row.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data=f"users_page_{page-1}"))
+    if page < total_pages: 
+        nav_row.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data=f"users_page_{page+1}"))
+    
+    if nav_row: 
+        kb_rows.append(nav_row)
     
     kb_rows.append([InlineKeyboardButton(text="🚫 Yopish", callback_data="close_users_list")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=kb_rows)
     
-    if is_message: await message_or_call.answer(text, reply_markup=keyboard, parse_mode="HTML")
-    else: await message_or_call.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    if is_message: 
+        await message_or_call.answer(text, reply_markup=keyboard, parse_mode="HTML")
+    else: 
+        await message_or_call.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 @admin_router.callback_query(F.data.startswith("users_page_"))
 async def users_pagination(call: CallbackQuery):
@@ -181,13 +197,17 @@ async def process_decision(call: CallbackQuery, bot: Bot):
     if action == "approve":
         await db.update_user_status(user_id, "ACTIVE")
         status_msg = f"✅ {name} tasdiqlandi!"
-        try: await bot.send_message(user_id, "🎉 <b>Tabriklaymiz! Arizangiz qabul qilindi.</b>\n/start bosib davom eting.", parse_mode="HTML")
-        except: pass
+        try: 
+            await bot.send_message(user_id, "🎉 <b>Tabriklaymiz! Arizangiz qabul qilindi.</b>\n/start bosib davom eting.", parse_mode="HTML")
+        except: 
+            pass
     else:
         await db.update_user_status(user_id, "REJECTED")
         status_msg = f"❌ {name} rad etildi."
-        try: await bot.send_message(user_id, "🚫 <b>Arizangiz rad etildi.</b>", parse_mode="HTML")
-        except: pass
+        try: 
+            await bot.send_message(user_id, "🚫 <b>Arizangiz rad etildi.</b>", parse_mode="HTML")
+        except: 
+            pass
     
     await call.answer(status_msg, show_alert=True)
     await show_users_page(call, 1)
@@ -235,11 +255,13 @@ async def ask_options(message: types.Message, state: FSMContext):
 @admin_router.message(AdminState.quiz_options)
 async def ask_correct(message: types.Message, state: FSMContext):
     options = [opt.strip() for opt in message.text.split(",")]
-    if len(options) < 2: return await message.answer("⚠️ Kamida 2 ta variant yozing.")
+    if len(options) < 2: 
+        return await message.answer("⚠️ Kamida 2 ta variant yozing.")
     await state.update_data(options=options)
     
     kb = []
-    for idx, opt in enumerate(options): kb.append([InlineKeyboardButton(text=opt, callback_data=f"correct_{idx}")])
+    for idx, opt in enumerate(options): 
+        kb.append([InlineKeyboardButton(text=opt, callback_data=f"correct_{idx}")])
     await message.answer("✅ <b>To'g'ri javobni tanlang:</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
     await state.set_state(AdminState.quiz_correct)
 
@@ -254,10 +276,12 @@ async def save_quiz_handler(call: CallbackQuery, state: FSMContext):
 @admin_router.callback_query(F.data == "list_quiz")
 async def list_quizzes(call: CallbackQuery):
     quizzes = await db.get_all_quizzes()
-    if not quizzes: return await call.answer("Savollar yo'q", show_alert=True)
+    if not quizzes: 
+        return await call.answer("Savollar yo'q", show_alert=True)
     
     kb = []
-    for q in quizzes: kb.append([InlineKeyboardButton(text=f"🗑 {q['question'][:20]}...", callback_data=f"delquiz_{q['id']}")])
+    for q in quizzes: 
+        kb.append([InlineKeyboardButton(text=f"🗑 {q['question'][:20]}...", callback_data=f"delquiz_{q['id']}")])
     kb.append([InlineKeyboardButton(text="🔙 Ortga", callback_data="back_to_intro")])
     await call.message.edit_text("📋 <b>Savollar ro'yxati:</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
 
@@ -301,7 +325,8 @@ async def select_course_process(call: CallbackQuery, state: FSMContext):
 
 @admin_router.message(AdminState.setting_course_days)
 async def save_course_days_handler(message: types.Message, state: FSMContext):
-    if not message.text.isdigit(): return await message.answer("⚠️ Faqat raqam yozing.")
+    if not message.text.isdigit(): 
+        return await message.answer("⚠️ Faqat raqam yozing.")
     days = int(message.text)
     data = await state.get_data()
     await db.set_course_days(data['course_code'], days)
@@ -317,11 +342,14 @@ async def reset_days(call: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.setting_course_days)
 
 @admin_router.callback_query(F.data == "back_to_courses")
-async def back_course(call: CallbackQuery): await content_start(call.message)
+async def back_course(call: CallbackQuery): 
+    await call.message.delete()
+    await content_start(call.message)
 
 @admin_router.callback_query(F.data.startswith("back_to_days_"))
 async def back_days(call: CallbackQuery):
-    c = call.data.split('_')[3]; d = await db.get_course_days(c)
+    c = call.data.split('_')[3]
+    d = await db.get_course_days(c)
     await call.message.edit_text(f"🗓 <b>{c}</b> kursi.", reply_markup=days_grid_kb(c, d), parse_mode="HTML")
 
 @admin_router.callback_query(F.data.startswith("day_"))
@@ -335,11 +363,14 @@ async def view_c(call: CallbackQuery, bot: Bot):
     _, c, d = call.data.split("_")
     items = await db.get_day_content_list(c, d)
     chan = os.getenv(f"{c}_CHANNEL")
-    if not items: return await call.answer("Bo'sh!", show_alert=True)
+    if not items: 
+        return await call.answer("Bo'sh!", show_alert=True)
     await call.message.answer(f"👁 <b>{c} {d}-kun</b>:", parse_mode="HTML")
     for i in items:
-        try: await bot.copy_message(call.from_user.id, chan, int(i['file_id']))
-        except: pass
+        try: 
+            await bot.copy_message(call.from_user.id, chan, int(i['file_id']))
+        except: 
+            pass
 
 @admin_router.callback_query(F.data.startswith("clear_"))
 async def clear_c(call: CallbackQuery):
@@ -359,20 +390,26 @@ async def add_c(call: CallbackQuery, state: FSMContext):
 @admin_router.message(AdminState.uploading_media)
 async def upload_loop(message: types.Message, state: FSMContext, bot: Bot):
     if message.text == "🔙 Bekor qilish":
-        await state.clear(); await message.answer("Bekor qilindi", reply_markup=admin_home_kb()); return
+        await state.clear()
+        await message.answer("Bekor qilindi", reply_markup=admin_home_kb())
+        return
     if message.text == "✅ TUGATISH":
-        await state.clear(); await message.answer("✅ Saqlandi.", reply_markup=admin_home_kb()); return
+        await state.clear()
+        await message.answer("✅ Saqlandi.", reply_markup=admin_home_kb())
+        return
 
     data = await state.get_data()
     chan = os.getenv(f"{data['c']}_CHANNEL")
-    if not chan: return await message.answer(f"❌ .env da {data['c']}_CHANNEL topilmadi.")
+    if not chan: 
+        return await message.answer(f"❌ .env da {data['c']}_CHANNEL topilmadi.")
 
     try:
         sent = await bot.copy_message(chan, message.chat.id, message.message_id)
         c_type = "video" if message.video else "photo" if message.photo else "voice" if message.voice else "text"
         await db.add_content_item(data['c'], data['d'], c_type, str(sent.message_id), message.caption or message.text or "Dars", "")
         await message.answer("✅ Qo'shildi. Yana yuboring...")
-    except Exception as e: await message.answer(f"❌ Xato: {e}")
+    except Exception as e: 
+        await message.answer(f"❌ Xato: {e}")
 
 # ==========================================================
 #              7. QIDIRUV VA STATISTIKA
@@ -392,7 +429,8 @@ async def search_ask(message: types.Message, state: FSMContext):
 
 @admin_router.message(AdminState.search_user)
 async def search_process(message: types.Message, state: FSMContext):
-    if message.text == "🔙 Asosiy Menyu": return await back_to_home(message, state)
+    if message.text == "🔙 Asosiy Menyu": 
+        return await back_to_home(message, state)
     
     user = await db.search_user_universal(message.text)
     if not user: 
@@ -408,8 +446,10 @@ async def search_process(message: types.Message, state: FSMContext):
     
     kb_rows = []
     if user['status'] == 'PENDING_APPROVAL':
-        kb_rows.append([InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"approve_{user['user_id']}")])
-        kb_rows.append([InlineKeyboardButton(text="❌ Rad etish", callback_data=f"reject_{user['user_id']}")])
+        kb_rows.append([
+            InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"approve_{user['user_id']}"),
+            InlineKeyboardButton(text="❌ Rad etish", callback_data=f"reject_{user['user_id']}")
+        ])
     elif user['status'] == 'ACTIVE':
         kb_rows.append([InlineKeyboardButton(text="🚫 Bloklash", callback_data=f"reject_{user['user_id']}")])
     else:
@@ -464,7 +504,8 @@ async def manual_ask(message: types.Message, state: FSMContext):
 
 @admin_router.message(AdminState.manual_update)
 async def manual_save(message: types.Message, state: FSMContext):
-    if message.text == "🔙 Asosiy Menyu": return await back_to_home(message, state)
+    if message.text == "🔙 Asosiy Menyu": 
+        return await back_to_home(message, state)
     await db.save_manual_link(message.text)
     await message.answer("✅ <b>Qo'llanma linki yangilandi!</b>", reply_markup=admin_home_kb(), parse_mode="HTML")
     await state.clear()
@@ -481,7 +522,8 @@ async def broadcast_start(message: types.Message, state: FSMContext):
 
 @admin_router.message(AdminState.broadcast_type)
 async def broadcast_msg(message: types.Message, state: FSMContext):
-    if message.text == "🔙 Asosiy Menyu": return await back_to_home(message, state)
+    if message.text == "🔙 Asosiy Menyu": 
+        return await back_to_home(message, state)
     
     target = "ALL"
     if "Faol" in message.text: target = "ACTIVE"
@@ -493,7 +535,8 @@ async def broadcast_msg(message: types.Message, state: FSMContext):
 
 @admin_router.message(AdminState.broadcast_msg)
 async def broadcast_send(message: types.Message, state: FSMContext, bot: Bot):
-    if message.text == "🔙 Asosiy Menyu": return await back_to_home(message, state)
+    if message.text == "🔙 Asosiy Menyu": 
+        return await back_to_home(message, state)
 
     data = await state.get_data()
     target_status = data['target']
@@ -512,7 +555,8 @@ async def broadcast_send(message: types.Message, state: FSMContext, bot: Bot):
         try:
             await bot.copy_message(chat_id=u['user_id'], from_chat_id=message.chat.id, message_id=message.message_id)
             msg_count += 1
-        except: pass 
+        except: 
+            pass 
     
     await message.answer(f"✅ <b>Muvaffaqiyatli yuborildi:</b> {msg_count} ta userga.", reply_markup=admin_home_kb(), parse_mode="HTML")
     await state.clear()

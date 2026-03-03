@@ -93,11 +93,16 @@ async def get_ai_fitness_response(user_text: str) -> str:
         return "⚠️ Tizimda kichik uzilish bor. Birozdan so'ng qayta urinib ko'ring."
 
 async def get_daily_ai_broadcast(time_of_day: str) -> str:
-    if time_of_day == "ertalab": context = "Tongi tetiklik yoki nonushta haqida qisqa (2-3 gap) motivatsiya ber."
-    elif time_of_day == "tushlik": context = "Tushlikda to'g'ri ovqatlanish yoki suv ichish haqida qisqa (2-3 gap) maslahat ber."
-    else: context = "Kechqurun yurish, yengil ovqatlanish haqida qisqa (2-3 gap) so'rov/maslahat ber."
-
-    prompt = f"Sen D-ToxFit AI maslahatchisisan. Vazifang: {context}. QOIDA: Salomlashish so'zlarini ishlatma, to'g'ridan-to'g'ri fikrni yoz. Emoji ishlat."
+    if time_of_day == "ertalab":
+        context = "Ramazon oyida saharlik uchun to'yimli, kun davomida chanqatmaydigan oziq-ovqatlar (oqsil va murakkab uglevodlar) va yetarlicha suv ichish haqida qisqa (2-3 gap) sog'lom maslahat ber."
+    elif time_of_day == "tushlik":
+        context = "Ramazon oyida ro'zadorlar uchun kun o'rtasida quvvatni saqlash, sabrli bo'lish va yengil nafas olish mashqlari haqida qisqa (2-3 gap) motivatsiya ber. Ovqatlanish yoki suv ichish haqida umuman gapirma."
+    else:
+        context = "Ramazon oyida iftorlikni xurmo va suv bilan yengil ochish, birdaniga ko'p ovqat yeb qo'ymaslik va kechqurun ovqat hazm qilish uchun yengil sayr qilish haqida qisqa (2-3 gap) foydali maslahat ber."
+        
+    # Bu yerdan AI API ga so'rov yuborish kodi davom etadi...
+    # return await ai_request(context)
+    prompt = f"Sen D-ToxFit AI maslahatchisisan. Vazifang: {context}. QOIDA: Salomlashish so'zlarini ishlatma, to'g'ridan-to'g'ri fikrni yoz. Emoji kamroq lekin kerakli joyda ishlat."
     
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}

@@ -1,7 +1,6 @@
 import random
 import datetime
 import os
-import math
 from aiogram import Router, F, types, Bot
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
@@ -20,22 +19,18 @@ user_router = Router()
 #                 1. USER HOLATLARI (FSM)
 # ==========================================================
 class UserState(StatesGroup):
-    # Ro'yxatdan o'tish
     reg_name = State()
     reg_phone = State()
     reg_age = State()
     reg_weight = State()
     
-    # LMS (Kirish)
-    reading_manual = State()    # Qo'llanma
-    watching_intro = State()    # Video dars
-    solving_quiz = State()      # Test
+    reading_manual = State()
+    watching_intro = State()
+    solving_quiz = State()
     
-    # Kurs tanlash
     selecting_course = State()  
     confirming_course = State() 
     
-    # Asosiy jarayon
     dashboard = State()         
     reporting_in = State()      
     reporting_out = State()     
@@ -70,14 +65,16 @@ def kb_courses():
         resize_keyboard=True
     )
 
-# --- YANGI AI TUGMASI QO'SHILGAN DASHBOARD ---
+# --- MUKAMMALLASHTIRILGAN USER PANELI ---
 def kb_dashboard():
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🏋️‍♂️ Bugungi Mashq"), KeyboardButton(text="📝 Hisobot")],
-            [KeyboardButton(text="🤖 AI Maslahatchi")]
+            [KeyboardButton(text="🏋️‍♂️ Bugungi Mashq")],
+            [KeyboardButton(text="📊 Kunlik Hisobot"), KeyboardButton(text="🤖 AI Maslahatchi")],
+            [KeyboardButton(text="👤 Profilim")]
         ], 
-        resize_keyboard=True
+        resize_keyboard=True,
+        input_field_placeholder="Quyidagilardan birini tanlang ⬇️"
     )
 
 def kb_walk_check():
@@ -96,7 +93,6 @@ def kb_walk_check():
 async def cmd_start(message: types.Message, state: FSMContext, bot: Bot):
     user = await db.get_user(message.from_user.id)
     
-    # 1. YANGI USER
     if not user:
         await message.answer(
             "👋 <b>Assalomu alaykum!</b>\n\n"
@@ -108,7 +104,6 @@ async def cmd_start(message: types.Message, state: FSMContext, bot: Bot):
         await state.set_state(UserState.reg_name)
         return
 
-    # 2. KUTILMOQDA
     if user['status'] == 'PENDING_APPROVAL':
         await message.answer(
             f"⏳ <b>Arizangiz ko'rib chiqilmoqda.</b>\n\n"
@@ -119,12 +114,10 @@ async def cmd_start(message: types.Message, state: FSMContext, bot: Bot):
         )
         return
 
-    # 3. RAD ETILGAN
     if user['status'] == 'REJECTED':
         await message.answer("🚫 <b>Kechirasiz, sizning arizangiz rad etilgan yoki profilingiz bloklangan.</b>", parse_mode="HTML")
         return
 
-    # 4. TUGATGAN
     if user['status'] == 'FINISHED':
         await message.answer(
             "🏆 <b>TABRIKLAYMIZ! SIZ KURSNI TUGATDINGIZ!</b>\n\n"
@@ -134,7 +127,6 @@ async def cmd_start(message: types.Message, state: FSMContext, bot: Bot):
         )
         return
 
-    # 5. AKTIV (Lekin kurs tanlamagan) -> LMS
     if user['status'] == 'ACTIVE' and not user['current_course']:
         manual_link = await db.get_manual_link() or "https://t.me/"
         await message.answer(
@@ -149,7 +141,6 @@ async def cmd_start(message: types.Message, state: FSMContext, bot: Bot):
         await state.set_state(UserState.reading_manual)
         return
 
-    # 6. AKTIV KURSDA
     if user['status'] == 'ACTIVE' and user['current_course']:
         current_state = await state.get_state()
         if current_state == UserState.waiting_next_day:
@@ -157,14 +148,14 @@ async def cmd_start(message: types.Message, state: FSMContext, bot: Bot):
                  "🌙 <b>Bugungi rejani bajardingiz!</b>\n\n"
                  "Ertangi mashqlar soat <b>07:00</b> da ochiladi.\n"
                  "Yaxshi dam oling!", 
-                 reply_markup=ReplyKeyboardRemove(), 
+                 reply_markup=kb_dashboard(), 
                  parse_mode="HTML"
              )
         else:
             course_name = "D-ToxFit" if user['current_course'] == "PREMIUM" else "Torpedo"
             await message.answer(
                 f"🔥 <b>{course_name} — {user['current_day']}-KUN</b>\n\n"
-                "Bugungi mashg'ulotlarga tayyormisiz?", 
+                "Asosiy menyudasiz. Nima qilamiz?", 
                 reply_markup=kb_dashboard(), 
                 parse_mode="HTML"
             )
@@ -343,26 +334,27 @@ async def confirm_course_callback(call: types.CallbackQuery, state: FSMContext):
         await call.message.delete()
         await call.message.answer(
             f"🚀 <b>{data['course_name']} boshlandi!</b>\n\n"
-            "Sizga omad tilaymiz! Vazifalarni ko'rish uchun <b>'🏋️‍♂️ Bugungi Mashq'</b> tugmasini bosing.",
+            "Sizga omad tilaymiz! Asosiy menyudan kerakli bo'limni tanlang.",
             reply_markup=kb_dashboard(), 
             parse_mode="HTML"
         )
         await state.set_state(UserState.dashboard)
 
 # ==========================================================
-#                 7. KUNLIK AKTIVLIK (MASHQLAR)
+#                 7. ASOSIY MENYU TUGMALARI (DASHBOARD)
 # ==========================================================
 
-@user_router.message(UserState.dashboard, F.text == "🏋️‍♂️ Bugungi Mashq")
+# 1. BUGUNGI MASHQ
+@user_router.message(F.text == "🏋️‍♂️ Bugungi Mashq")
 async def get_task(message: types.Message, bot: Bot):
     user = await db.get_user(message.from_user.id)
-    
+    if not user or user['status'] != 'ACTIVE' or not user['current_course']: return
+
     if user['report_submitted_today']:
-        await message.answer("✅ <b>Bugungi vazifa bajarilgan.</b>\nErtaga ko'rishguncha!", parse_mode="HTML")
+        await message.answer("✅ <b>Bugungi vazifa bajarilgan.</b>\nErtangi kunni kuting!", parse_mode="HTML")
         return
 
     raw_content = await db.get_day_content_list(user['current_course'], user['current_day'])
-    
     if not raw_content:
         await message.answer("⚠️ <i>Mashqlar hali yuklanmagan yoki kurs yakunlangan.</i>", parse_mode="HTML")
         return
@@ -378,17 +370,54 @@ async def get_task(message: types.Message, bot: Bot):
 
     for item in content_list:
         try:
-            msg_id = int(item['file_id'])
-            await bot.copy_message(
-                chat_id=message.from_user.id,
-                from_chat_id=channel,
-                message_id=msg_id,
-                parse_mode="HTML"
-            )
+            await bot.copy_message(chat_id=message.from_user.id, from_chat_id=channel, message_id=int(item['file_id']), parse_mode="HTML")
         except:
             pass 
 
-    await message.answer("Mashqlarni bajarib bo'lgach, <b>'📝 Hisobot'</b> tugmasini bosing.", parse_mode="HTML")
+    await message.answer("Mashqlarni bajarib bo'lgach, <b>'📊 Kunlik Hisobot'</b> tugmasini bosing.", parse_mode="HTML")
+
+# 2. PROFILIM
+@user_router.message(F.text == "👤 Profilim")
+async def show_profile(message: types.Message):
+    user = await db.get_user(message.from_user.id)
+    if not user: return
+    
+    course_n = "D-ToxFit 🟢" if user['current_course'] == 'PREMIUM' else "Torpedo 🔴" if user['current_course'] == 'TORPEDO' else "Tanlanmagan"
+    
+    text = (
+        f"👤 <b>Shaxsiy Profilingiz:</b>\n\n"
+        f"📛 <b>Ism:</b> {user['full_name']}\n"
+        f"🆔 <b>ID:</b> <code>{user['six_digit_id']}</code>\n"
+        f"⚖️ <b>Boshlang'ich vazn:</b> {user['weight']} kg\n\n"
+        f"📚 <b>Joriy kurs:</b> {course_n}\n"
+        f"📅 <b>Bosqich:</b> {user['current_day']}-kun"
+    )
+    await message.answer(text, parse_mode="HTML")
+
+# 3. AI MASLAHATCHI (MOTIVATSIYA VA KALORIYA)
+@user_router.message(F.text == "🤖 AI Maslahatchi")
+async def ai_advisor_btn(message: types.Message):
+    user = await db.get_user(message.from_user.id)
+    if not user or user['status'] != 'ACTIVE': return
+
+    quotes = [
+        "Sizning eng katta raqibingiz — bu kechagi o'zingiz. Bugun undan kuchliroq bo'ling! 💪",
+        "Muvaffaqiyat kichik, ammo har kuni takrorlanadigan qadamlardan iborat. Aslo to'xtamang! 🚶‍♂️",
+        "Sog'lom tana — sog'lom aql. O'zingizga bo'lgan ishonchni bugundan yarating! ✨",
+        "Qiyin bo'lishi mumkin, lekin bu imkonsiz degani emas. Maqsad sari olg'a! 🎯",
+        "Natija darhol ko'rinmasligi mumkin, lekin har bir harakatingiz sizni maqsadga yaqinlashtirmoqda. 📈"
+    ]
+    
+    quote = random.choice(quotes)
+    
+    text = (
+        f"💡 <i>\"{quote}\"</i>\n\n"
+        f"🤖 <b>Salom {user['full_name']}! Men sizning shaxsiy AI maslahatchingizman.</b>\n\n"
+        f"🍽 Bugun nimalar tanovul qildingiz? Yegan ovqatlaringizni yozib yuborsangiz, ularning <b>kaloriyasini hisoblab berishim</b> mumkin.\n\n"
+        f"Yoki ozish, mashqlar va sog'lom ovqatlanish bo'yicha qanday savolingiz bor? Bemalol yozing!"
+    )
+    
+    await message.answer(text, parse_mode="HTML")
 
 # --- YURISH JAVOBLARI ---
 @user_router.callback_query(F.data == "walk_yes")
@@ -405,16 +434,21 @@ async def walk_no_handler(call: CallbackQuery):
 #                 8. HISOBOT VA LOGIKA
 # ==========================================================
 
-@user_router.message(UserState.dashboard, F.text == "📝 Hisobot")
+@user_router.message(F.text == "📊 Kunlik Hisobot")
 async def start_report(message: types.Message, state: FSMContext):
-    await message.answer("🍽 <b>Hisobot vaqti!</b>\n\nBugun jami qancha kaloriya qabul qildingiz? (Faqat raqam):", parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+    user = await db.get_user(message.from_user.id)
+    if not user or user['status'] != 'ACTIVE' or not user['current_course']: return
+    if user['report_submitted_today']:
+        return await message.answer("✅ Siz bugungi hisobotni topshirib bo'lgansiz.", parse_mode="HTML")
+
+    await message.answer("🍽 <b>Hisobot vaqti!</b>\n\nBugun jami qancha kaloriya qabul qildingiz? (Faqat raqam yozing):", parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
     await state.set_state(UserState.reporting_in)
 
 @user_router.message(UserState.reporting_in)
 async def report_cal_in(message: types.Message, state: FSMContext):
     if not message.text.isdigit(): return await message.answer("⚠️ Iltimos, faqat raqam kiriting.")
     await state.update_data(cal_in=int(message.text))
-    await message.answer("🔥 Qancha kaloriya yo'qotdingiz? (Raqam):", parse_mode="HTML")
+    await message.answer("🔥 Qancha kaloriya yo'qotdingiz? (Faqat raqam):", parse_mode="HTML")
     await state.set_state(UserState.reporting_out)
 
 @user_router.message(UserState.reporting_out)
@@ -470,59 +504,54 @@ async def report_cal_out(message: types.Message, state: FSMContext, bot: Bot):
             "Siz ajoyib natija ko'rsatdingiz!\n"
             "Ertangi mashqlar soat <b>07:00 da</b> ochiladi.\n"
             "Yaxshi dam oling! 😴",
-            parse_mode="HTML", reply_markup=ReplyKeyboardRemove()
+            parse_mode="HTML", reply_markup=kb_dashboard()
         )
         await state.set_state(UserState.waiting_next_day)
 
 @user_router.message(UserState.waiting_next_day)
 async def waiting_handler(message: types.Message):
-    await message.answer("💤 <b>Bot dam olmoqda...</b>\nErtangi mashqlar soat 07:00 da yuboriladi.", parse_mode="HTML")
+    # Agar shu holatda menyu tugmasi bosilsa, pastdagi F.text handlerlar ushlab olishi uchun pass qildik
+    if message.text in ["🏋️‍♂️ Bugungi Mashq", "📊 Kunlik Hisobot", "🤖 AI Maslahatchi", "👤 Profilim"]:
+        return
+    await message.answer("💤 <b>Bot dam olmoqda...</b>\nErtangi mashqlar soat 07:00 da yuboriladi.\nLekin AI maslahatchiga savol berishingiz mumkin!", parse_mode="HTML")
 
 
 # ==========================================================
-#                 9. AI COLLABORATION (YANGI, KAFOLATLANGAN USUL)
+#                 9. AI BILAN ERKIN SUHBAT
 # ==========================================================
 
-# E'tibor bering: Holat (State) olib tashlandi, endi hamma matnni ushlaydi
 @user_router.message(F.text)
 async def ai_chat_handler(message: types.Message, state: FSMContext, bot: Bot):
     user_text = message.text
 
-    # 1. Asosiy tizim tugmalarini AI ga yubormaymiz
-    if user_text in ["🏋️‍♂️ Bugungi Mashq", "📝 Hisobot", "🤖 AI Maslahatchi"]:
-        if user_text == "🤖 AI Maslahatchi":
-            await message.answer(
-                "🤖 <b>Salom! Men D-ToxFit loyihasining AI maslahatchisiman.</b>\n\n"
-                "Ozish, ovqatlanish yoki mashqlar haqida savolingizni shu yerga yozing!", 
-                parse_mode="HTML"
-            )
+    # Tizim tugmalari noto'g'ri ishlamasligi uchun xavfsizlik
+    if user_text in ["🏋️‍♂️ Bugungi Mashq", "📊 Kunlik Hisobot", "🤖 AI Maslahatchi", "👤 Profilim"]:
         return
 
-    # 2. Foydalanuvchi muhim jarayonda emasligini tekshiramiz
+    # Foydalanuvchi muhim ro'yxatdan o'tish yoki hisobot berish jarayonida bo'lsa AI jim turadi
     current_state = await state.get_state()
-    # Agar user ism/raqam yozayotgan, test yechayotgan yoki hisobot topshirayotgan bo'lsa -> AI aralashmaydi
     if current_state in [
         UserState.reg_name, UserState.reg_phone, UserState.reg_age, UserState.reg_weight, 
         UserState.solving_quiz, UserState.reporting_in, UserState.reporting_out
     ]:
         return
 
-    # 3. ASOSIY QISM: Bazadan userni tekshiramiz
+    # Userni tekshirish
     user = await db.get_user(message.from_user.id)
-    
-    # Agar user bazada yo'q bo'lsa, tasdiqlanmagan bo'lsa yoki kurs tanlamagan bo'lsa -> AI jim turadi
     if not user or user['status'] != 'ACTIVE' or not user['current_course']:
         return
 
-    # 4. Hamma shartdan o'tdi! Endi AI ga xabar yuboramiz.
+    # AI javob berish jarayoni
     try:
         await bot.send_chat_action(chat_id=message.chat.id, action="typing")
         reply = await get_ai_fitness_response(user_text)
 
+        # Uzun matnlarni bo'lib yuborish
         if len(reply) > 4000:
             for i in range(0, len(reply), 4000):
                 await message.answer(reply[i:i+4000], parse_mode="HTML")
         else:
             await message.answer(reply, parse_mode="HTML")
+            
     except Exception as e:
-        await message.answer("⚠️ Texnik uzilish yuz berdi. Iltimos, keyinroq qayta urinib ko'ring.")
+        await message.answer("⚠️ Texnik uzilish yuz berdi. Iltimos, birozdan so'ng qayta urinib ko'ring.")

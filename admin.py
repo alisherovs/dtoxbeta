@@ -1,4 +1,5 @@
 import os
+import re
 import math
 import pandas as pd
 from aiogram import Router, F, types, Bot
@@ -33,14 +34,10 @@ def parse_admin_ids(raw_value: str) -> list:
     return result
 
 
-def normalize_chat_id(value):
+def normalize_channel_username(value):
     """
-    Qabul qiladi:
-    - https://t.me/channelname
-    - http://t.me/channelname
-    - t.me/channelname
-    - @channelname
-    - -1001234567890
+    Kanal qiymatini public username formatga o'tkazadi.
+    Natija doim @username bo'ladi.
     """
     if value is None:
         return None
@@ -62,24 +59,64 @@ def normalize_chat_id(value):
     if value.startswith("@"):
         return value
 
-    if value.lstrip("-").isdigit():
-        return int(value)
-
-    return value
+    return f"@{value}"
 
 
 def get_course_channel(course_code: str):
     raw = os.getenv(f"{course_code}_CHANNEL", "")
-    return normalize_chat_id(raw)
+    return normalize_channel_username(raw)
 
 
-def build_post_link(chat_value, message_id: int):
+def build_post_link(channel_username: str, message_id: int) -> str:
+    username = channel_username.lstrip("@")
+    return f"https://t.me/{username}/{message_id}"
+
+
+def parse_post_link(link: str):
     """
-    Faqat public username bo'lsa ishlaydi.
-    int chat_id bo'lsa public link yasab bo'lmaydi.
+    https://t.me/channelusername/123
+    -> ('@channelusername', 123)
     """
-    if isinstance(chat_value, str) and chat_value.startswith("@"):
-        return f"https://t.me/{chat_value[1:]}/{message_id}"
+    if not link:
+        return None, None
+
+    pattern = r"(?:https?://)?t\.me/([A-Za-z0-9_]+)/(\d+)"
+    match = re.search(pattern, str(link).strip())
+
+    if not match:
+        return None, None
+
+    username = f"@{match.group(1)}"
+    message_id = int(match.group(2))
+    return username, message_id
+
+
+def detect_content_type(message: types.Message) -> str:
+    if message.video:
+        return "video"
+    if message.photo:
+        return "photo"
+    if message.voice:
+        return "voice"
+    if message.audio:
+        return "audio"
+    if message.document:
+        return "document"
+    if message.text:
+        return "text"
+    return "unknown"
+
+
+def extract_saved_post_link(item: dict):
+    """
+    DB dagi eski-yangi formatlar bilan ishlash uchun.
+    Endi file_id ichida link saqlaymiz.
+    """
+    possible_keys = ["file_id", "post_link", "file_link", "source_link", "link"]
+    for key in possible_keys:
+        value = item.get(key)
+        if value and isinstance(value, str) and "t.me/" in value:
+            return value.strip()
     return None
 
 
@@ -559,10 +596,6 @@ async def view_c(call: CallbackQuery, bot: Bot):
     await call.answer()
     _, c, d = call.data.split("_")
     items = await db.get_day_content_list(c, d)
-    chan = get_course_channel(c)
-
-    if not chan:
-        return await call.answer(f"{c}_CHANNEL topilmadi yoki noto'g'ri.", show_alert=True)
 
     if not items:
         return await call.answer("Bo'sh!", show_alert=True)
@@ -570,25 +603,27 @@ async def view_c(call: CallbackQuery, bot: Bot):
     success_count = 0
     fail_count = 0
 
-    await call.message.answer(
-        f"👁 <b>{c} {d}-kun</b>\n"
-        f"📡 Manba kanal/guruh: <code>{chan}</code>",
-        parse_mode="HTML"
-    )
+    for item in items:
+        post_link = extract_saved_post_link(item)
+        from_chat_id, message_id = parse_post_link(post_link)
 
-    for i in items:
+        if not from_chat_id or not message_id:
+            fail_count += 1
+            print(f"[VIEW PARSE ERROR] item={item}")
+            continue
+
         try:
             await bot.copy_message(
                 chat_id=call.from_user.id,
-                from_chat_id=chan,
-                message_id=int(i['file_id'])
+                from_chat_id=from_chat_id,
+                message_id=message_id
             )
             success_count += 1
         except Exception as e:
             fail_count += 1
             print(
                 f"[VIEW CONTENT ERROR] "
-                f"course={c}, day={d}, channel={chan}, message_id={i['file_id']}, error={e}"
+                f"course={c}, day={d}, post_link={post_link}, error={e}"
             )
 
     await call.message.answer(
@@ -620,7 +655,7 @@ async def add_c(call: CallbackQuery, state: FSMContext):
     chan = get_course_channel(c)
     await call.message.answer(
         f"📥 <b>{c} {d}-kun</b> uchun media yuboring.\n"
-        f"📡 Saqlanadigan kanal/guruh: <code>{chan}</code>\n"
+        f"📡 Saqlanadigan kanal: <code>{chan}</code>\n"
         f"Tugatgach '✅ TUGATISH' bosing.",
         reply_markup=finish_upload_kb(),
         parse_mode="HTML"
@@ -644,8 +679,14 @@ async def upload_loop(message: types.Message, state: FSMContext, bot: Bot):
     chan = get_course_channel(data['c'])
 
     if not chan:
+        await message.answer(f"❌ {data['c']}_CHANNEL topilmadi yoki noto'g'ri.")
+        return
+
+    if not str(chan).startswith("@"):
         await message.answer(
-            f"❌ {data['c']}_CHANNEL noto'g'ri yoki topilmadi."
+            f"❌ Link modeli uchun kanal public username bo'lishi kerak.\n"
+            f"Hozirgi qiymat: <code>{chan}</code>",
+            parse_mode="HTML"
         )
         return
 
@@ -669,55 +710,39 @@ async def upload_loop(message: types.Message, state: FSMContext, bot: Bot):
             message_id=message.message_id
         )
 
-        if message.video:
-            c_type = "video"
-        elif message.photo:
-            c_type = "photo"
-        elif message.voice:
-            c_type = "voice"
-        elif message.audio:
-            c_type = "audio"
-        elif message.document:
-            c_type = "document"
-        else:
-            c_type = "text"
-
+        c_type = detect_content_type(message)
         post_link = build_post_link(chan, sent.message_id)
 
-        # Bu yerda real file_id emas, manba kanal/guruhdagi message_id saqlanadi
+        # file_id ustuniga endi post link saqlaymiz
         await db.add_content_item(
             data['c'],
             data['d'],
             c_type,
-            str(sent.message_id),
+            post_link,
             message.caption or message.text or "Dars",
-            post_link or ""
+            ""
         )
 
-        text = (
-            f"✅ Media muvaffaqiyatli saqlandi.\n"
-            f"📡 Kanal/guruh: <code>{chan}</code>\n"
-            f"🆔 Post message_id: <code>{sent.message_id}</code>\n"
+        await message.answer(
+            f"✅ Media kanalga saqlandi.\n"
+            f"🔗 Post link: {post_link}\n"
+            f"🆔 Kanal post ID: <code>{sent.message_id}</code>\n"
+            f"Yana yuboring...",
+            parse_mode="HTML"
         )
-
-        if post_link:
-            text += f"🔗 Link: {post_link}\n"
-
-        text += "Yana yuboring..."
-
-        await message.answer(text, parse_mode="HTML")
 
     except Exception as e:
         print(
-            f"[UPLOAD ERROR] course={data['c']}, day={data['d']}, "
-            f"channel={chan}, from_chat={message.chat.id}, msg_id={message.message_id}, error={e}"
+            f"[UPLOAD ERROR] "
+            f"course={data['c']}, day={data['d']}, channel={chan}, "
+            f"from_chat={message.chat.id}, msg_id={message.message_id}, error={e}"
         )
         await message.answer(
             f"❌ Media saqlanmadi: {e}\n\n"
             f"Tekshiring:\n"
-            f"1) Bot kanal/guruhga qo'shilganmi\n"
+            f"1) Bot kanalga qo'shilganmi\n"
             f"2) Bot admin qilinganmi\n"
-            f"3) Kanal qiymati to'g'rimi: <code>{chan}</code>",
+            f"3) Kanal publicmi: <code>{chan}</code>",
             parse_mode="HTML"
         )
 

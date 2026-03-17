@@ -19,13 +19,18 @@ load_dotenv()
 admin_router = Router()
 
 # ==========================================================
-#     ADMIN XAVFSIZLIK FILTRI (Mukammal versiya)
+#     ADMIN XAVFSIZLIK FILTRI (Mukammal va Xatosiz versiya)
 # ==========================================================
 # .env dagi ADMIN_ID ni o'qiymiz
-ADMIN_ID_RAW = os.getenv("ADMIN_ID", "")
+ADMIN_ID_RAW = str(os.getenv("ADMIN_ID", ""))
 
-# Vergul bilan ajratilgan raqamlarni tozalab, ro'yxatga (list) aylantiramiz
-ADMIN_IDS = [int(i.strip()) for i in ADMIN_ID_RAW.split(",") if i.strip().isdigit()]
+# Barcha ortiqcha belgilarni (qo'shtirnoq, probel) tozalab, ro'yxatga aylantiramiz
+ADMIN_IDS = []
+for admin_id in ADMIN_ID_RAW.split(","):
+    # Probeldan va qo'shtirnoqlardan tozalaymiz
+    clean_id = admin_id.strip().replace('"', '').replace("'", "")
+    if clean_id.isdigit():
+        ADMIN_IDS.append(int(clean_id))
 
 # Ushbu routerdagi barcha message va callbacklar FAQAT shu ro'yxatdagi adminlarga ishlaydi!
 admin_router.message.filter(F.from_user.id.in_(ADMIN_IDS))
@@ -750,7 +755,7 @@ async def broadcast_send(message: types.Message, state: FSMContext, bot: Bot):
             )
             msg_count += 1
         except Exception:
-            pass 
+            pass # Agar user botni bloklagan bo'lsa xato bermaydi, shunchaki o'tkazib yuboradi
 
     await message.answer(
         f"✅ <b>Muvaffaqiyatli yuborildi:</b> {msg_count} ta userga.",

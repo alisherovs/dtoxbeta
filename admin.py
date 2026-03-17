@@ -13,13 +13,13 @@ from aiogram.types import (
 from dotenv import load_dotenv
 import database as db
 
-# .env faylini chaqiramiz
 load_dotenv()
 
 admin_router = Router()
 
+
 # ==========================================================
-#     YORDAMCHI FUNKSIYALAR
+#                     YORDAMCHI FUNKSIYALAR
 # ==========================================================
 
 def parse_admin_ids(raw_value: str) -> list:
@@ -33,10 +33,8 @@ def parse_admin_ids(raw_value: str) -> list:
     return result
 
 
-def normalize_chat_id(chat_value):
+def normalize_chat_id(value):
     """
-    .env ichidagi kanal/guruh qiymatini Telegram uchun to'g'ri formatga o'tkazadi.
-
     Qabul qiladi:
     - https://t.me/channelname
     - http://t.me/channelname
@@ -44,51 +42,49 @@ def normalize_chat_id(chat_value):
     - @channelname
     - -1001234567890
     """
-    if chat_value is None:
+    if value is None:
         return None
 
-    value = str(chat_value).strip()
+    value = str(value).strip()
     if not value:
         return None
 
-    # Link bo'lsa @username ko'rinishiga o'tkazamiz
     if value.startswith("https://t.me/") or value.startswith("http://t.me/"):
         value = value.rstrip("/")
         username = value.split("/")[-1].strip()
-        if username:
-            return f"@{username}"
-        return None
+        return f"@{username}" if username else None
 
     if value.startswith("t.me/"):
         value = value.rstrip("/")
         username = value.split("/")[-1].strip()
-        if username:
-            return f"@{username}"
-        return None
+        return f"@{username}" if username else None
 
-    # Username bo'lsa
     if value.startswith("@"):
         return value
 
-    # Sonli chat_id bo'lsa
     if value.lstrip("-").isdigit():
         return int(value)
 
-    # Boshqa format bo'lsa ham string qaytaramiz
     return value
 
 
 def get_course_channel(course_code: str):
-    """
-    PREMIUM -> PREMIUM_CHANNEL
-    TORPEDO -> TORPEDO_CHANNEL
-    """
     raw = os.getenv(f"{course_code}_CHANNEL", "")
     return normalize_chat_id(raw)
 
 
+def build_post_link(chat_value, message_id: int):
+    """
+    Faqat public username bo'lsa ishlaydi.
+    int chat_id bo'lsa public link yasab bo'lmaydi.
+    """
+    if isinstance(chat_value, str) and chat_value.startswith("@"):
+        return f"https://t.me/{chat_value[1:]}/{message_id}"
+    return None
+
+
 # ==========================================================
-#     ADMIN XAVFSIZLIK FILTRI
+#                     ADMIN FILTR
 # ==========================================================
 
 ADMIN_ID_RAW = os.getenv("ADMIN_ID", "")
@@ -97,33 +93,31 @@ ADMIN_IDS = parse_admin_ids(ADMIN_ID_RAW)
 admin_router.message.filter(F.from_user.id.in_(ADMIN_IDS))
 admin_router.callback_query.filter(F.from_user.id.in_(ADMIN_IDS))
 
+
 # ==========================================================
-#     STATES
+#                     HOLATLAR
 # ==========================================================
 
 class AdminState(StatesGroup):
     search_user = State()
     manual_update = State()
 
-    # Kurs va Kontent
     content_course = State()
     setting_course_days = State()
     content_view_day = State()
     uploading_media = State()
 
-    # Intro va Test
     intro_upload = State()
     quiz_question = State()
     quiz_options = State()
     quiz_correct = State()
 
-    # Broadcast
     broadcast_type = State()
     broadcast_msg = State()
 
 
 # ==========================================================
-#     KLAVIATURALAR
+#                     KLAVIATURALAR
 # ==========================================================
 
 def admin_home_kb():
@@ -198,7 +192,7 @@ def day_actions_kb(course, day):
 
 
 # ==========================================================
-#     ASOSIY START
+#                     START
 # ==========================================================
 
 @admin_router.message(Command(commands=["start", "admin"]))
@@ -218,7 +212,7 @@ async def back_to_home(message: types.Message, state: FSMContext):
 
 
 # ==========================================================
-#     ZAYAVKALAR
+#                     ZAYAVKALAR
 # ==========================================================
 
 @admin_router.message(F.text == "🆕 Yangi Zayavkalar")
@@ -314,8 +308,8 @@ async def process_decision(call: CallbackQuery, bot: Bot):
                 "🎉 <b>Tabriklaymiz! Arizangiz qabul qilindi.</b>\n/start bosib davom eting.",
                 parse_mode="HTML"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[APPROVE SEND ERROR] user_id={user_id}, error={e}")
     else:
         await db.update_user_status(user_id, "REJECTED")
         status_msg = f"❌ {name} rad etildi."
@@ -325,15 +319,15 @@ async def process_decision(call: CallbackQuery, bot: Bot):
                 "🚫 <b>Arizangiz rad etildi.</b>",
                 parse_mode="HTML"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[REJECT SEND ERROR] user_id={user_id}, error={e}")
 
     await call.answer(status_msg, show_alert=True)
     await show_users_page(call, 1)
 
 
 # ==========================================================
-#     INTRO VIDEO VA TESTLAR
+#                     INTRO VA TESTLAR
 # ==========================================================
 
 @admin_router.message(F.text == "🎬 Kirish va Testlar")
@@ -457,7 +451,7 @@ async def back_intro_handler(call: CallbackQuery):
 
 
 # ==========================================================
-#     KURS KONTENTI
+#                     KURS KONTENTI
 # ==========================================================
 
 @admin_router.message(F.text == "📚 Kurs Kontenti")
@@ -573,14 +567,14 @@ async def view_c(call: CallbackQuery, bot: Bot):
     if not items:
         return await call.answer("Bo'sh!", show_alert=True)
 
-    await call.message.answer(
-        f"👁 <b>{c} {d}-kun</b>\n"
-        f"📡 Kanal: <code>{chan}</code>",
-        parse_mode="HTML"
-    )
-
     success_count = 0
     fail_count = 0
+
+    await call.message.answer(
+        f"👁 <b>{c} {d}-kun</b>\n"
+        f"📡 Manba kanal/guruh: <code>{chan}</code>",
+        parse_mode="HTML"
+    )
 
     for i in items:
         try:
@@ -592,7 +586,10 @@ async def view_c(call: CallbackQuery, bot: Bot):
             success_count += 1
         except Exception as e:
             fail_count += 1
-            print(f"[VIEW CONTENT ERROR] course={c}, day={d}, channel={chan}, msg_id={i['file_id']}, error={e}")
+            print(
+                f"[VIEW CONTENT ERROR] "
+                f"course={c}, day={d}, channel={chan}, message_id={i['file_id']}, error={e}"
+            )
 
     await call.message.answer(
         f"✅ Yuborildi: {success_count} ta\n"
@@ -620,8 +617,11 @@ async def add_c(call: CallbackQuery, state: FSMContext):
     except Exception:
         pass
 
+    chan = get_course_channel(c)
     await call.message.answer(
-        f"📥 <b>{c} {d}-kun</b>. Media yuboring.\nTugatgach '✅ TUGATISH' bosing.",
+        f"📥 <b>{c} {d}-kun</b> uchun media yuboring.\n"
+        f"📡 Saqlanadigan kanal/guruh: <code>{chan}</code>\n"
+        f"Tugatgach '✅ TUGATISH' bosing.",
         reply_markup=finish_upload_kb(),
         parse_mode="HTML"
     )
@@ -644,7 +644,10 @@ async def upload_loop(message: types.Message, state: FSMContext, bot: Bot):
     chan = get_course_channel(data['c'])
 
     if not chan:
-        return await message.answer(f"❌ .env da {data['c']}_CHANNEL topilmadi yoki noto'g'ri formatda.")
+        await message.answer(
+            f"❌ {data['c']}_CHANNEL noto'g'ri yoki topilmadi."
+        )
+        return
 
     allowed = any([
         message.video,
@@ -656,7 +659,8 @@ async def upload_loop(message: types.Message, state: FSMContext, bot: Bot):
     ])
 
     if not allowed:
-        return await message.answer("⚠️ Faqat text, photo, video, voice, audio yoki document yuboring.")
+        await message.answer("⚠️ Faqat text, photo, video, voice, audio yoki document yuboring.")
+        return
 
     try:
         sent = await bot.copy_message(
@@ -678,27 +682,40 @@ async def upload_loop(message: types.Message, state: FSMContext, bot: Bot):
         else:
             c_type = "text"
 
+        post_link = build_post_link(chan, sent.message_id)
+
+        # Bu yerda real file_id emas, manba kanal/guruhdagi message_id saqlanadi
         await db.add_content_item(
             data['c'],
             data['d'],
             c_type,
             str(sent.message_id),
             message.caption or message.text or "Dars",
-            ""
+            post_link or ""
         )
 
-        await message.answer(
-            f"✅ Qo'shildi.\n"
-            f"📡 Kanal: <code>{chan}</code>\n"
-            f"🆔 Saqlangan message_id: <code>{sent.message_id}</code>\n"
-            f"Yana yuboring...",
-            parse_mode="HTML"
+        text = (
+            f"✅ Media muvaffaqiyatli saqlandi.\n"
+            f"📡 Kanal/guruh: <code>{chan}</code>\n"
+            f"🆔 Post message_id: <code>{sent.message_id}</code>\n"
         )
+
+        if post_link:
+            text += f"🔗 Link: {post_link}\n"
+
+        text += "Yana yuboring..."
+
+        await message.answer(text, parse_mode="HTML")
+
     except Exception as e:
+        print(
+            f"[UPLOAD ERROR] course={data['c']}, day={data['d']}, "
+            f"channel={chan}, from_chat={message.chat.id}, msg_id={message.message_id}, error={e}"
+        )
         await message.answer(
-            f"❌ Xato: {e}\n\n"
+            f"❌ Media saqlanmadi: {e}\n\n"
             f"Tekshiring:\n"
-            f"1) Bot kanalga qo'shilganmi\n"
+            f"1) Bot kanal/guruhga qo'shilganmi\n"
             f"2) Bot admin qilinganmi\n"
             f"3) Kanal qiymati to'g'rimi: <code>{chan}</code>",
             parse_mode="HTML"
@@ -706,7 +723,7 @@ async def upload_loop(message: types.Message, state: FSMContext, bot: Bot):
 
 
 # ==========================================================
-#     QIDIRUV VA STATISTIKA
+#                     QIDIRUV
 # ==========================================================
 
 @admin_router.message(F.text == "🔍 Qidiruv")
@@ -764,6 +781,10 @@ async def search_process(message: types.Message, state: FSMContext):
     )
 
 
+# ==========================================================
+#                     STATISTIKA
+# ==========================================================
+
 @admin_router.message(F.text == "📊 Statistika")
 async def stats_show(message: types.Message):
     kb = InlineKeyboardMarkup(
@@ -803,11 +824,12 @@ async def export_handler(call: CallbackQuery):
         await call.message.answer_document(FSInputFile(fname), caption=f"📊 {status} Userlar ro'yxati")
         os.remove(fname)
     except Exception as e:
+        print(f"[EXPORT ERROR] status={status}, error={e}")
         await call.message.answer(f"❌ Xatolik: {e}")
 
 
 # ==========================================================
-#     QO'LLANMA VA XABAR YUBORISH
+#                     QO'LLANMA
 # ==========================================================
 
 @admin_router.message(F.text == "📖 Qo'llanma")
@@ -829,6 +851,10 @@ async def manual_save(message: types.Message, state: FSMContext):
     await message.answer("✅ <b>Qo'llanma linki yangilandi!</b>", reply_markup=admin_home_kb(), parse_mode="HTML")
     await state.clear()
 
+
+# ==========================================================
+#                     BROADCAST
+# ==========================================================
 
 @admin_router.message(F.text == "📢 Xabar Yuborish")
 async def broadcast_start(message: types.Message, state: FSMContext):
@@ -892,8 +918,9 @@ async def broadcast_send(message: types.Message, state: FSMContext, bot: Bot):
                 message_id=message.message_id
             )
             msg_count += 1
-        except Exception:
+        except Exception as e:
             fail_count += 1
+            print(f"[BROADCAST ERROR] user_id={u['user_id']}, error={e}")
 
     await message.answer(
         f"✅ <b>Muvaffaqiyatli yuborildi:</b> {msg_count} ta userga.\n"

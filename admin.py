@@ -13,25 +13,94 @@ from aiogram.types import (
 from dotenv import load_dotenv
 import database as db
 
-# .env faylini chaqiramiz (agar main.py da chaqirilmagan bo'lsa, xavfsizlik uchun)
+# .env faylini chaqiramiz
 load_dotenv()
 
 admin_router = Router()
 
 # ==========================================================
-#     ADMIN XAVFSIZLIK FILTRI (Mukammal versiya)
+#     YORDAMCHI FUNKSIYALAR
 # ==========================================================
-# .env dagi ADMIN_ID ni o'qiymiz (Masalan: "8008006509, 8008157657")
+
+def parse_admin_ids(raw_value: str) -> list:
+    if not raw_value:
+        return []
+    result = []
+    for item in raw_value.split(","):
+        item = item.strip()
+        if item.isdigit():
+            result.append(int(item))
+    return result
+
+
+def normalize_chat_id(chat_value):
+    """
+    .env ichidagi kanal/guruh qiymatini Telegram uchun to'g'ri formatga o'tkazadi.
+
+    Qabul qiladi:
+    - https://t.me/channelname
+    - http://t.me/channelname
+    - t.me/channelname
+    - @channelname
+    - -1001234567890
+    """
+    if chat_value is None:
+        return None
+
+    value = str(chat_value).strip()
+    if not value:
+        return None
+
+    # Link bo'lsa @username ko'rinishiga o'tkazamiz
+    if value.startswith("https://t.me/") or value.startswith("http://t.me/"):
+        value = value.rstrip("/")
+        username = value.split("/")[-1].strip()
+        if username:
+            return f"@{username}"
+        return None
+
+    if value.startswith("t.me/"):
+        value = value.rstrip("/")
+        username = value.split("/")[-1].strip()
+        if username:
+            return f"@{username}"
+        return None
+
+    # Username bo'lsa
+    if value.startswith("@"):
+        return value
+
+    # Sonli chat_id bo'lsa
+    if value.lstrip("-").isdigit():
+        return int(value)
+
+    # Boshqa format bo'lsa ham string qaytaramiz
+    return value
+
+
+def get_course_channel(course_code: str):
+    """
+    PREMIUM -> PREMIUM_CHANNEL
+    TORPEDO -> TORPEDO_CHANNEL
+    """
+    raw = os.getenv(f"{course_code}_CHANNEL", "")
+    return normalize_chat_id(raw)
+
+
+# ==========================================================
+#     ADMIN XAVFSIZLIK FILTRI
+# ==========================================================
+
 ADMIN_ID_RAW = os.getenv("ADMIN_ID", "")
+ADMIN_IDS = parse_admin_ids(ADMIN_ID_RAW)
 
-# Vergul bilan ajratilgan raqamlarni tozalab, ro'yxatga (list) aylantiramiz
-ADMIN_IDS = [int(i.strip()) for i in ADMIN_ID_RAW.split(",") if i.strip().isdigit()]
-
-# Ushbu routerdagi barcha message va callbacklar FAQAT shu ro'yxatdagi adminlarga ishlaydi!
 admin_router.message.filter(F.from_user.id.in_(ADMIN_IDS))
 admin_router.callback_query.filter(F.from_user.id.in_(ADMIN_IDS))
 
-# --- 1. STATES (HOLATLAR) ---
+# ==========================================================
+#     STATES
+# ==========================================================
+
 class AdminState(StatesGroup):
     search_user = State()
     manual_update = State()
@@ -42,25 +111,32 @@ class AdminState(StatesGroup):
     content_view_day = State()
     uploading_media = State()
 
-    # Intro va Test (LMS)
+    # Intro va Test
     intro_upload = State()
     quiz_question = State()
     quiz_options = State()
     quiz_correct = State()
 
-    # Broadcast (Xabar yuborish)
+    # Broadcast
     broadcast_type = State()
     broadcast_msg = State()
 
-# --- 2. KLAVIATURALAR (UI) ---
+
+# ==========================================================
+#     KLAVIATURALAR
+# ==========================================================
 
 def admin_home_kb():
-    return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="🆕 Yangi Zayavkalar"), KeyboardButton(text="🔍 Qidiruv")],
-        [KeyboardButton(text="📚 Kurs Kontenti"), KeyboardButton(text="🎬 Kirish va Testlar")],
-        [KeyboardButton(text="📊 Statistika"), KeyboardButton(text="📢 Xabar Yuborish")],
-        [KeyboardButton(text="📖 Qo'llanma")]
-    ], resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🆕 Yangi Zayavkalar"), KeyboardButton(text="🔍 Qidiruv")],
+            [KeyboardButton(text="📚 Kurs Kontenti"), KeyboardButton(text="🎬 Kirish va Testlar")],
+            [KeyboardButton(text="📊 Statistika"), KeyboardButton(text="📢 Xabar Yuborish")],
+            [KeyboardButton(text="📖 Qo'llanma")]
+        ],
+        resize_keyboard=True
+    )
+
 
 def back_kb():
     return ReplyKeyboardMarkup(
@@ -68,44 +144,62 @@ def back_kb():
         resize_keyboard=True
     )
 
+
 def finish_upload_kb():
-    return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="✅ TUGATISH")],
-        [KeyboardButton(text="🔙 Bekor qilish")]
-    ], resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="✅ TUGATISH")],
+            [KeyboardButton(text="🔙 Bekor qilish")]
+        ],
+        resize_keyboard=True
+    )
 
-# Intro va Test Menyusi
+
 def intro_test_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📹 Intro Videoni Yuklash", callback_data="upload_intro")],
-        [InlineKeyboardButton(text="➕ Yangi Savol Qo'shish", callback_data="add_quiz")],
-        [InlineKeyboardButton(text="📋 Savollar Ro'yxati (O'chirish)", callback_data="list_quiz")]
-    ])
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📹 Intro Videoni Yuklash", callback_data="upload_intro")],
+            [InlineKeyboardButton(text="➕ Yangi Savol Qo'shish", callback_data="add_quiz")],
+            [InlineKeyboardButton(text="📋 Savollar Ro'yxati (O'chirish)", callback_data="list_quiz")]
+        ]
+    )
 
-# Dinamik Kunlar Gridi
+
 def days_grid_kb(course_code, total_days):
     buttons = []
     row = []
+
     for i in range(1, total_days + 1):
         row.append(InlineKeyboardButton(text=f"{i}", callback_data=f"day_{course_code}_{i}"))
         if len(row) == 5:
             buttons.append(row)
             row = []
+
     if row:
         buttons.append(row)
+
     buttons.append([InlineKeyboardButton(text="⚙️ Kunlar sonini o'zgartirish", callback_data=f"resetdays_{course_code}")])
     buttons.append([InlineKeyboardButton(text="🔙 Kurslarga qaytish", callback_data="back_to_courses")])
+
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-def day_actions_kb(course, day):
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👁 Ko'rish", callback_data=f"view_{course}_{day}"),
-         InlineKeyboardButton(text="🗑 Tozalash", callback_data=f"clear_{course}_{day}")],
-        [InlineKeyboardButton(text="➕ Media Qo'shish", callback_data=f"add_{course}_{day}")],
-        [InlineKeyboardButton(text="🔙 Kunlarga qaytish", callback_data=f"back_to_days_{course}")]
-    ])
 
-# --- 3. ASOSIY START ---
+def day_actions_kb(course, day):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="👁 Ko'rish", callback_data=f"view_{course}_{day}"),
+                InlineKeyboardButton(text="🗑 Tozalash", callback_data=f"clear_{course}_{day}")
+            ],
+            [InlineKeyboardButton(text="➕ Media Qo'shish", callback_data=f"add_{course}_{day}")],
+            [InlineKeyboardButton(text="🔙 Kunlarga qaytish", callback_data=f"back_to_days_{course}")]
+        ]
+    )
+
+
+# ==========================================================
+#     ASOSIY START
+# ==========================================================
 
 @admin_router.message(Command(commands=["start", "admin"]))
 async def admin_start(message: types.Message, state: FSMContext):
@@ -116,21 +210,24 @@ async def admin_start(message: types.Message, state: FSMContext):
         parse_mode="HTML"
     )
 
+
 @admin_router.message(F.text == "🔙 Asosiy Menyu")
 async def back_to_home(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("🏠 Asosiy menyu:", reply_markup=admin_home_kb())
 
+
 # ==========================================================
-#              4. ZAYAVKALAR (CARD STYLE + PAGINATION)
+#     ZAYAVKALAR
 # ==========================================================
 
 @admin_router.message(F.text == "🆕 Yangi Zayavkalar")
 async def view_users_start(message: types.Message):
     await show_users_page(message, page=1)
 
+
 async def show_users_page(message_or_call, page):
-    limit = 3  # Bir sahifada 3 ta user
+    limit = 3
     users, total = await db.get_pending_users_paginated(page, limit)
 
     is_message = isinstance(message_or_call, types.Message)
@@ -164,7 +261,7 @@ async def show_users_page(message_or_call, page):
 
         kb_rows.append([
             InlineKeyboardButton(text=f"✅ Tasdiqlash ({u['six_digit_id']})", callback_data=f"approve_{u['user_id']}"),
-            InlineKeyboardButton(text=f"❌ Rad etish", callback_data=f"reject_{u['user_id']}")
+            InlineKeyboardButton(text="❌ Rad etish", callback_data=f"reject_{u['user_id']}")
         ])
 
     nav_row = []
@@ -187,16 +284,19 @@ async def show_users_page(message_or_call, page):
         except Exception:
             await message_or_call.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
+
 @admin_router.callback_query(F.data.startswith("users_page_"))
 async def users_pagination(call: CallbackQuery):
     page = int(call.data.split("_")[2])
     await call.answer()
     await show_users_page(call, page)
 
+
 @admin_router.callback_query(F.data == "close_users_list")
 async def close_list(call: CallbackQuery):
     await call.answer()
     await call.message.delete()
+
 
 @admin_router.callback_query(F.data.startswith(("approve_", "reject_")))
 async def process_decision(call: CallbackQuery, bot: Bot):
@@ -220,15 +320,20 @@ async def process_decision(call: CallbackQuery, bot: Bot):
         await db.update_user_status(user_id, "REJECTED")
         status_msg = f"❌ {name} rad etildi."
         try:
-            await bot.send_message(user_id, "🚫 <b>Arizangiz rad etildi.</b>", parse_mode="HTML")
+            await bot.send_message(
+                user_id,
+                "🚫 <b>Arizangiz rad etildi.</b>",
+                parse_mode="HTML"
+            )
         except Exception:
             pass
 
     await call.answer(status_msg, show_alert=True)
     await show_users_page(call, 1)
 
+
 # ==========================================================
-#              5. INTRO VIDEO VA TESTLAR (LMS)
+#     INTRO VIDEO VA TESTLAR
 # ==========================================================
 
 @admin_router.message(F.text == "🎬 Kirish va Testlar")
@@ -245,11 +350,13 @@ async def intro_test_menu(message: types.Message):
     )
     await message.answer(text, reply_markup=intro_test_kb(), parse_mode="HTML")
 
+
 @admin_router.callback_query(F.data == "upload_intro")
 async def ask_intro(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await call.message.answer("📹 <b>Intro videoni yuboring:</b>", reply_markup=back_kb(), parse_mode="HTML")
     await state.set_state(AdminState.intro_upload)
+
 
 @admin_router.message(AdminState.intro_upload, F.video)
 async def save_intro_handler(message: types.Message, state: FSMContext):
@@ -257,17 +364,20 @@ async def save_intro_handler(message: types.Message, state: FSMContext):
     await message.answer("✅ <b>Intro video saqlandi!</b>", reply_markup=admin_home_kb(), parse_mode="HTML")
     await state.clear()
 
+
 @admin_router.message(AdminState.intro_upload)
 async def invalid_intro_handler(message: types.Message):
     if message.text == "🔙 Asosiy Menyu":
         return
     await message.answer("⚠️ Iltimos, aynan video yuboring yoki '🔙 Asosiy Menyu' tugmasini bosing.")
 
+
 @admin_router.callback_query(F.data == "add_quiz")
 async def ask_question(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await call.message.answer("❓ <b>Savol matnini yozing:</b>", parse_mode="HTML")
     await state.set_state(AdminState.quiz_question)
+
 
 @admin_router.message(AdminState.quiz_question)
 async def ask_options(message: types.Message, state: FSMContext):
@@ -277,6 +387,7 @@ async def ask_options(message: types.Message, state: FSMContext):
         parse_mode="HTML"
     )
     await state.set_state(AdminState.quiz_options)
+
 
 @admin_router.message(AdminState.quiz_options)
 async def ask_correct(message: types.Message, state: FSMContext):
@@ -297,6 +408,7 @@ async def ask_correct(message: types.Message, state: FSMContext):
     )
     await state.set_state(AdminState.quiz_correct)
 
+
 @admin_router.callback_query(AdminState.quiz_correct, F.data.startswith("correct_"))
 async def save_quiz_handler(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -305,6 +417,7 @@ async def save_quiz_handler(call: CallbackQuery, state: FSMContext):
     await call.message.edit_text("✅ <b>Savol saqlandi!</b>", parse_mode="HTML")
     await state.clear()
     await intro_test_menu(call.message)
+
 
 @admin_router.callback_query(F.data == "list_quiz")
 async def list_quizzes(call: CallbackQuery):
@@ -325,11 +438,13 @@ async def list_quizzes(call: CallbackQuery):
         parse_mode="HTML"
     )
 
+
 @admin_router.callback_query(F.data.startswith("delquiz_"))
 async def delete_quiz_handler(call: CallbackQuery):
     await db.delete_quiz(int(call.data.split("_")[1]))
     await call.answer("O'chirildi")
     await list_quizzes(call)
+
 
 @admin_router.callback_query(F.data == "back_to_intro")
 async def back_intro_handler(call: CallbackQuery):
@@ -340,17 +455,21 @@ async def back_intro_handler(call: CallbackQuery):
         pass
     await intro_test_menu(call.message)
 
+
 # ==========================================================
-#              6. KURS KONTENTI (D-ToxFit & TORPEDO)
+#     KURS KONTENTI
 # ==========================================================
 
 @admin_router.message(F.text == "📚 Kurs Kontenti")
 async def content_start(message: types.Message):
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🟢 D-ToxFit", callback_data="course_PREMIUM")],
-        [InlineKeyboardButton(text="🔴 Torpedo", callback_data="course_TORPEDO")]
-    ])
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🟢 D-ToxFit", callback_data="course_PREMIUM")],
+            [InlineKeyboardButton(text="🔴 Torpedo", callback_data="course_TORPEDO")]
+        ]
+    )
     await message.answer("📂 <b>Qaysi kursni tahrirlaymiz?</b>", reply_markup=kb, parse_mode="HTML")
+
 
 @admin_router.callback_query(F.data.startswith("course_"))
 async def select_course_process(call: CallbackQuery, state: FSMContext):
@@ -372,6 +491,7 @@ async def select_course_process(call: CallbackQuery, state: FSMContext):
             reply_markup=days_grid_kb(course_code, days),
             parse_mode="HTML"
         )
+
 
 @admin_router.message(AdminState.setting_course_days)
 async def save_course_days_handler(message: types.Message, state: FSMContext):
@@ -396,6 +516,7 @@ async def save_course_days_handler(message: types.Message, state: FSMContext):
     )
     await state.clear()
 
+
 @admin_router.callback_query(F.data.startswith("resetdays_"))
 async def reset_days(call: CallbackQuery, state: FSMContext):
     await call.answer()
@@ -403,6 +524,7 @@ async def reset_days(call: CallbackQuery, state: FSMContext):
     await state.update_data(course_code=c)
     await call.message.edit_text(f"⚙️ <b>{c}</b>: Yangi kunlar sonini yozing:", parse_mode="HTML")
     await state.set_state(AdminState.setting_course_days)
+
 
 @admin_router.callback_query(F.data == "back_to_courses")
 async def back_course(call: CallbackQuery):
@@ -412,6 +534,7 @@ async def back_course(call: CallbackQuery):
     except Exception:
         pass
     await content_start(call.message)
+
 
 @admin_router.callback_query(F.data.startswith("back_to_days_"))
 async def back_days(call: CallbackQuery):
@@ -424,6 +547,7 @@ async def back_days(call: CallbackQuery):
         parse_mode="HTML"
     )
 
+
 @admin_router.callback_query(F.data.startswith("day_"))
 async def day_menu(call: CallbackQuery):
     await call.answer()
@@ -435,22 +559,46 @@ async def day_menu(call: CallbackQuery):
         parse_mode="HTML"
     )
 
+
 @admin_router.callback_query(F.data.startswith("view_"))
 async def view_c(call: CallbackQuery, bot: Bot):
     await call.answer()
     _, c, d = call.data.split("_")
     items = await db.get_day_content_list(c, d)
-    chan = os.getenv(f"{c}_CHANNEL")
+    chan = get_course_channel(c)
+
+    if not chan:
+        return await call.answer(f"{c}_CHANNEL topilmadi yoki noto'g'ri.", show_alert=True)
 
     if not items:
         return await call.answer("Bo'sh!", show_alert=True)
 
-    await call.message.answer(f"👁 <b>{c} {d}-kun</b>:", parse_mode="HTML")
+    await call.message.answer(
+        f"👁 <b>{c} {d}-kun</b>\n"
+        f"📡 Kanal: <code>{chan}</code>",
+        parse_mode="HTML"
+    )
+
+    success_count = 0
+    fail_count = 0
+
     for i in items:
         try:
-            await bot.copy_message(call.from_user.id, chan, int(i['file_id']))
-        except Exception:
-            pass
+            await bot.copy_message(
+                chat_id=call.from_user.id,
+                from_chat_id=chan,
+                message_id=int(i['file_id'])
+            )
+            success_count += 1
+        except Exception as e:
+            fail_count += 1
+            print(f"[VIEW CONTENT ERROR] course={c}, day={d}, channel={chan}, msg_id={i['file_id']}, error={e}")
+
+    await call.message.answer(
+        f"✅ Yuborildi: {success_count} ta\n"
+        f"❌ Xato: {fail_count} ta"
+    )
+
 
 @admin_router.callback_query(F.data.startswith("clear_"))
 async def clear_c(call: CallbackQuery):
@@ -460,21 +608,25 @@ async def clear_c(call: CallbackQuery):
     await call.answer("Tozalandi", show_alert=True)
     await day_menu(call)
 
+
 @admin_router.callback_query(F.data.startswith("add_"))
 async def add_c(call: CallbackQuery, state: FSMContext):
     await call.answer()
     _, c, d = call.data.split("_")
     await state.update_data(c=c, d=d)
+
     try:
         await call.message.delete()
     except Exception:
         pass
+
     await call.message.answer(
         f"📥 <b>{c} {d}-kun</b>. Media yuboring.\nTugatgach '✅ TUGATISH' bosing.",
         reply_markup=finish_upload_kb(),
         parse_mode="HTML"
     )
     await state.set_state(AdminState.uploading_media)
+
 
 @admin_router.message(AdminState.uploading_media)
 async def upload_loop(message: types.Message, state: FSMContext, bot: Bot):
@@ -489,16 +641,29 @@ async def upload_loop(message: types.Message, state: FSMContext, bot: Bot):
         return
 
     data = await state.get_data()
-    chan = os.getenv(f"{data['c']}_CHANNEL")
-    if not chan:
-        return await message.answer(f"❌ .env da {data['c']}_CHANNEL topilmadi.")
+    chan = get_course_channel(data['c'])
 
-    allowed = any([message.video, message.photo, message.voice, message.text, message.document, message.audio])
+    if not chan:
+        return await message.answer(f"❌ .env da {data['c']}_CHANNEL topilmadi yoki noto'g'ri formatda.")
+
+    allowed = any([
+        message.video,
+        message.photo,
+        message.voice,
+        message.text,
+        message.document,
+        message.audio
+    ])
+
     if not allowed:
         return await message.answer("⚠️ Faqat text, photo, video, voice, audio yoki document yuboring.")
 
     try:
-        sent = await bot.copy_message(chan, message.chat.id, message.message_id)
+        sent = await bot.copy_message(
+            chat_id=chan,
+            from_chat_id=message.chat.id,
+            message_id=message.message_id
+        )
 
         if message.video:
             c_type = "video"
@@ -521,12 +686,27 @@ async def upload_loop(message: types.Message, state: FSMContext, bot: Bot):
             message.caption or message.text or "Dars",
             ""
         )
-        await message.answer("✅ Qo'shildi. Yana yuboring...")
+
+        await message.answer(
+            f"✅ Qo'shildi.\n"
+            f"📡 Kanal: <code>{chan}</code>\n"
+            f"🆔 Saqlangan message_id: <code>{sent.message_id}</code>\n"
+            f"Yana yuboring...",
+            parse_mode="HTML"
+        )
     except Exception as e:
-        await message.answer(f"❌ Xato: {e}")
+        await message.answer(
+            f"❌ Xato: {e}\n\n"
+            f"Tekshiring:\n"
+            f"1) Bot kanalga qo'shilganmi\n"
+            f"2) Bot admin qilinganmi\n"
+            f"3) Kanal qiymati to'g'rimi: <code>{chan}</code>",
+            parse_mode="HTML"
+        )
+
 
 # ==========================================================
-#              7. QIDIRUV VA STATISTIKA
+#     QIDIRUV VA STATISTIKA
 # ==========================================================
 
 @admin_router.message(F.text == "🔍 Qidiruv")
@@ -541,6 +721,7 @@ async def search_ask(message: types.Message, state: FSMContext):
         parse_mode="HTML"
     )
     await state.set_state(AdminState.search_user)
+
 
 @admin_router.message(AdminState.search_user)
 async def search_process(message: types.Message, state: FSMContext):
@@ -582,12 +763,15 @@ async def search_process(message: types.Message, state: FSMContext):
         parse_mode="HTML"
     )
 
+
 @admin_router.message(F.text == "📊 Statistika")
 async def stats_show(message: types.Message):
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📥 Hamma (Excel)", callback_data="export_ALL")],
-        [InlineKeyboardButton(text="📥 Faol (Excel)", callback_data="export_ACTIVE")]
-    ])
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📥 Hamma (Excel)", callback_data="export_ALL")],
+            [InlineKeyboardButton(text="📥 Faol (Excel)", callback_data="export_ACTIVE")]
+        ]
+    )
 
     all_u = await db.get_users_by_status("ALL")
     active_u = await db.get_users_by_status("ACTIVE")
@@ -599,6 +783,7 @@ async def stats_show(message: types.Message):
     )
 
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
 
 @admin_router.callback_query(F.data.startswith("export_"))
 async def export_handler(call: CallbackQuery):
@@ -620,8 +805,9 @@ async def export_handler(call: CallbackQuery):
     except Exception as e:
         await call.message.answer(f"❌ Xatolik: {e}")
 
+
 # ==========================================================
-#              8. QO'LLANMA VA XABAR YUBORISH
+#     QO'LLANMA VA XABAR YUBORISH
 # ==========================================================
 
 @admin_router.message(F.text == "📖 Qo'llanma")
@@ -634,6 +820,7 @@ async def manual_ask(message: types.Message, state: FSMContext):
     )
     await state.set_state(AdminState.manual_update)
 
+
 @admin_router.message(AdminState.manual_update)
 async def manual_save(message: types.Message, state: FSMContext):
     if message.text == "🔙 Asosiy Menyu":
@@ -642,15 +829,20 @@ async def manual_save(message: types.Message, state: FSMContext):
     await message.answer("✅ <b>Qo'llanma linki yangilandi!</b>", reply_markup=admin_home_kb(), parse_mode="HTML")
     await state.clear()
 
+
 @admin_router.message(F.text == "📢 Xabar Yuborish")
 async def broadcast_start(message: types.Message, state: FSMContext):
-    kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="👥 Hammaga"), KeyboardButton(text="✅ Faollarga")],
-        [KeyboardButton(text="⏳ Tasdiqlanmaganlarga"), KeyboardButton(text="🔙 Asosiy Menyu")]
-    ], resize_keyboard=True)
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="👥 Hammaga"), KeyboardButton(text="✅ Faollarga")],
+            [KeyboardButton(text="⏳ Tasdiqlanmaganlarga"), KeyboardButton(text="🔙 Asosiy Menyu")]
+        ],
+        resize_keyboard=True
+    )
 
     await message.answer("📢 <b>Kimga xabar yuboramiz?</b>", reply_markup=kb, parse_mode="HTML")
     await state.set_state(AdminState.broadcast_type)
+
 
 @admin_router.message(AdminState.broadcast_type)
 async def broadcast_msg(message: types.Message, state: FSMContext):
@@ -664,8 +856,9 @@ async def broadcast_msg(message: types.Message, state: FSMContext):
         target = "PENDING_APPROVAL"
 
     await state.update_data(target=target)
-    await message.answer(f"📝 <b>Xabarni yuboring:</b>", reply_markup=back_kb(), parse_mode="HTML")
+    await message.answer("📝 <b>Xabarni yuboring:</b>", reply_markup=back_kb(), parse_mode="HTML")
     await state.set_state(AdminState.broadcast_msg)
+
 
 @admin_router.message(AdminState.broadcast_msg)
 async def broadcast_send(message: types.Message, state: FSMContext, bot: Bot):
@@ -684,6 +877,8 @@ async def broadcast_send(message: types.Message, state: FSMContext, bot: Bot):
         return
 
     msg_count = 0
+    fail_count = 0
+
     await message.answer(
         f"🚀 <b>Xabar yuborish boshlandi...</b> (Jami: {len(users_to_send)} ta)",
         parse_mode="HTML"
@@ -698,10 +893,11 @@ async def broadcast_send(message: types.Message, state: FSMContext, bot: Bot):
             )
             msg_count += 1
         except Exception:
-            pass
+            fail_count += 1
 
     await message.answer(
-        f"✅ <b>Muvaffaqiyatli yuborildi:</b> {msg_count} ta userga.",
+        f"✅ <b>Muvaffaqiyatli yuborildi:</b> {msg_count} ta userga.\n"
+        f"❌ <b>Yuborilmadi:</b> {fail_count} ta userga.",
         reply_markup=admin_home_kb(),
         parse_mode="HTML"
     )

@@ -6,7 +6,7 @@ load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 SYSTEM_PROMPT = """
-Sen "D-ToxFit" loyihasining professional fitnes, dietologiya va sog'lom turmush tarzi bo'yicha sun'iy intellekt maslahatchisisan.
+"D-ToxFit" loyihasining professional fitnes, dietologiya va sog'lom turmush tarzi bo'yicha sun'iy intellekt maslahatchisisan.
 Sening vazifang: Foydalanuvchilarga ozish, to'g'ri ovqatlanish, kaloriyalar hisobi va jismoniy mashqlar bo'yicha ilmiy asoslangan maslahatlar berish.
 Maxsulotimiz tarkibi: D-TOX fit tarkibi quyidagicha:
 
@@ -93,22 +93,29 @@ async def get_ai_fitness_response(user_text: str) -> str:
         return "⚠️ Tizimda kichik uzilish bor. Birozdan so'ng qayta urinib ko'ring."
 
 async def get_daily_ai_broadcast(time_of_day: str) -> str:
+    # Odatiy kunlar uchun sog'lom turmush tarzi promptlari
     if time_of_day == "ertalab":
-        context = "Ramazon oyida saharlik uchun to'yimli, kun davomida chanqatmaydigan oziq-ovqatlar (oqsil va murakkab uglevodlar) va yetarlicha suv ichish haqida qisqa (2-3 gap) sog'lom maslahat ber."
+        context = "Ertalabki energiya, sog'lom nonushta va kunni bir stakan iliq suv bilan boshlashning muhimligi haqida qisqa (2-3 gap) motivatsion maslahat ber."
     elif time_of_day == "tushlik":
-        context = "Ramazon oyida ro'zadorlar uchun kun o'rtasida quvvatni saqlash, sabrli bo'lish va yengil nafas olish mashqlari haqida qisqa (2-3 gap) motivatsiya ber. Ovqatlanish yoki suv ichish haqida umuman gapirma."
+        context = "Tushlikda oqsil va sabzavotlarga boy ovqatlanish, kun o'rtasida quvvatni saqlab qolish va biroz harakat qilish (stretching) haqida qisqa (2-3 gap) foydali maslahat ber."
     else:
-        context = "Ramazon oyida iftorlikni xurmo va suv bilan yengil ochish, birdaniga ko'p ovqat yeb qo'ymaslik va kechqurun ovqat hazm qilish uchun yengil sayr qilish haqida qisqa (2-3 gap) foydali maslahat ber."
+        context = "Kechqurun yengil ovqatlanish, kunlik sarflangan energiyani tiklash, yaxshi uxlash va ovqat hazm qilish uchun kechki sayr haqida qisqa (2-3 gap) foydali maslahat ber."
         
-    # Bu yerdan AI API ga so'rov yuborish kodi davom etadi...
-    # return await ai_request(context)
     prompt = f"Sen D-ToxFit AI maslahatchisisan. Vazifang: {context}. QOIDA: Salomlashish so'zlarini ishlatma, to'g'ridan-to'g'ri fikrni yoz. Emoji kamroq lekin kerakli joyda ishlat."
     
     url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    data = {"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "temperature": 0.7}
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}", 
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "llama-3.3-70b-versatile", 
+        "messages": [{"role": "user", "content": prompt}], 
+        "temperature": 0.7
+    }
 
     try:
+        import aiohttp # Agar fayl boshida import qilinmagan bo'lsa
         async with aiohttp.ClientSession() as session:
             # 🟢 DIQQAT: ssl=False qo'shildi
             async with session.post(url, headers=headers, json=data, timeout=30, ssl=False) as response:
@@ -116,6 +123,10 @@ async def get_daily_ai_broadcast(time_of_day: str) -> str:
                 return (await response.json())["choices"][0]["message"]["content"]
     except Exception as e:
         print(f"\n❌ AI XATOLIGI (Broadcast): {e}\n")
-        if time_of_day == "ertalab": return "Kuningiz barakali o'tsin! Nonushtani o'tkazib yubormang. ☀️"
-        elif time_of_day == "tushlik": return "Tushlik vaqti bo'ldi! Suv ichish esdan chiqmasin. 💧"
-        else: return "Bugun 30 daqiqa piyoda yurishga ulgurdingizmi? 🚶‍♂️"
+        # Xatolik yuz berganda yuboriladigan tayyor shablonlar
+        if time_of_day == "ertalab": 
+            return "Kuningiz barakali va energiya bilan o'tsin! Nonushtani o'tkazib yubormang. ☀️"
+        elif time_of_day == "tushlik": 
+            return "Tushlik vaqti bo'ldi! To'yimli ovqatlanish va suv ichish esingizdan chiqmasin. 💧"
+        else: 
+            return "Kechqurun yengil ovqatlaning va yaxshi dam oling. Bugun 30 daqiqa piyoda yurishga ulgurdingizmi? 🚶‍♂️"

@@ -13,7 +13,7 @@ from aiogram.types import (
 from dotenv import load_dotenv
 import database as db
 
-# .env faylini chaqiramiz (agar main.py da chaqirilmagan bo'lsa, xavfsizlik uchun)
+# .env faylini chaqiramiz
 load_dotenv()
 
 admin_router = Router()
@@ -21,7 +21,7 @@ admin_router = Router()
 # ==========================================================
 #     ADMIN XAVFSIZLIK FILTRI (Mukammal versiya)
 # ==========================================================
-# .env dagi ADMIN_ID ni o'qiymiz (Masalan: "8008006509, 8008157657")
+# .env dagi ADMIN_ID ni o'qiymiz
 ADMIN_ID_RAW = os.getenv("ADMIN_ID", "")
 
 # Vergul bilan ajratilgan raqamlarni tozalab, ro'yxatga (list) aylantiramiz
@@ -97,11 +97,13 @@ def days_grid_kb(course_code, total_days):
     buttons.append([InlineKeyboardButton(text="🔙 Kurslarga qaytish", callback_data="back_to_courses")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+# Tahrirlangan: Kun ichidagi amallar (Ertalab va Kechki ga ajratilgan)
 def day_actions_kb(course, day):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="👁 Ko'rish", callback_data=f"view_{course}_{day}"),
          InlineKeyboardButton(text="🗑 Tozalash", callback_data=f"clear_{course}_{day}")],
-        [InlineKeyboardButton(text="➕ Media Qo'shish", callback_data=f"add_{course}_{day}")],
+        [InlineKeyboardButton(text="🌅 Ertalabgi Media Qo'shish", callback_data=f"add_{course}_{day}_morning")],
+        [InlineKeyboardButton(text="🌃 Kechki Media Qo'shish", callback_data=f"add_{course}_{day}_evening")],
         [InlineKeyboardButton(text="🔙 Kunlarga qaytish", callback_data=f"back_to_days_{course}")]
     ])
 
@@ -151,6 +153,11 @@ async def show_users_page(message_or_call, page):
         return
 
     total_pages = math.ceil(total / limit)
+    # Agar ohirgi sahifadan oshib ketsa
+    if page > total_pages and total_pages > 0:
+        page = total_pages
+        users, total = await db.get_pending_users_paginated(page, limit)
+
     text = f"🆕 <b>KUTILAYOTGAN ARIZALAR</b>\n"
     text += f"📄 Sahifa: <b>{page}/{total_pages}</b> | Jami: <b>{total}</b> ta\n\n"
 
@@ -251,17 +258,18 @@ async def ask_intro(call: CallbackQuery, state: FSMContext):
     await call.message.answer("📹 <b>Intro videoni yuboring:</b>", reply_markup=back_kb(), parse_mode="HTML")
     await state.set_state(AdminState.intro_upload)
 
-@admin_router.message(AdminState.intro_upload, F.video)
+@admin_router.message(AdminState.intro_upload, F.content_type.in_({'video', 'document'}))
 async def save_intro_handler(message: types.Message, state: FSMContext):
-    await db.save_intro(message.video.file_id, message.caption or "Intro")
+    file_id = message.video.file_id if message.video else message.document.file_id
+    await db.save_intro(file_id, message.caption or "Intro")
     await message.answer("✅ <b>Intro video saqlandi!</b>", reply_markup=admin_home_kb(), parse_mode="HTML")
     await state.clear()
 
 @admin_router.message(AdminState.intro_upload)
-async def invalid_intro_handler(message: types.Message):
+async def invalid_intro_handler(message: types.Message, state: FSMContext):
     if message.text == "🔙 Asosiy Menyu":
-        return
-    await message.answer("⚠️ Iltimos, aynan video yuboring yoki '🔙 Asosiy Menyu' tugmasini bosing.")
+        return await back_to_home(message, state)
+    await message.answer("⚠️ Iltimos, aynan video yuboring.")
 
 @admin_router.callback_query(F.data == "add_quiz")
 async def ask_question(call: CallbackQuery, state: FSMContext):
@@ -271,6 +279,7 @@ async def ask_question(call: CallbackQuery, state: FSMContext):
 
 @admin_router.message(AdminState.quiz_question)
 async def ask_options(message: types.Message, state: FSMContext):
+    if not message.text: return await message.answer("⚠️ Iltimos, matn yuboring.")
     await state.update_data(question=message.text)
     await message.answer(
         "🔠 <b>Variantlarni vergul bilan ajratib yozing:</b>\n<i>Masalan: Ha, Yo'q, Bilmayman</i>",
@@ -280,6 +289,7 @@ async def ask_options(message: types.Message, state: FSMContext):
 
 @admin_router.message(AdminState.quiz_options)
 async def ask_correct(message: types.Message, state: FSMContext):
+    if not message.text: return await message.answer("⚠️ Variantlarni matn shaklida yuboring.")
     options = [opt.strip() for opt in message.text.split(",") if opt.strip()]
     if len(options) < 2:
         return await message.answer("⚠️ Kamida 2 ta variant yozing.")
@@ -375,7 +385,7 @@ async def select_course_process(call: CallbackQuery, state: FSMContext):
 
 @admin_router.message(AdminState.setting_course_days)
 async def save_course_days_handler(message: types.Message, state: FSMContext):
-    if not message.text.isdigit():
+    if not message.text or not message.text.isdigit():
         return await message.answer("⚠️ Faqat raqam yozing.")
 
     days = int(message.text)
@@ -383,15 +393,17 @@ async def save_course_days_handler(message: types.Message, state: FSMContext):
         return await message.answer("⚠️ Kunlar soni 1 yoki undan katta bo'lishi kerak.")
 
     data = await state.get_data()
-    await db.set_course_days(data['course_code'], days)
+    course_code = data['course_code']
+    await db.set_course_days(course_code, days)
+    
     await message.answer(
-        f"✅ <b>{data['course_code']}</b>: {days} kun belgilandi.",
+        f"✅ <b>{course_code}</b>: {days} kun belgilandi.",
         reply_markup=back_kb(),
         parse_mode="HTML"
     )
     await message.answer(
-        f"🗓 <b>{data['course_code']}</b> kursi.",
-        reply_markup=days_grid_kb(data['course_code'], days),
+        f"🗓 <b>{course_code}</b> kursi.",
+        reply_markup=days_grid_kb(course_code, days),
         parse_mode="HTML"
     )
     await state.clear()
@@ -424,33 +436,52 @@ async def back_days(call: CallbackQuery):
         parse_mode="HTML"
     )
 
+# Tahrirlangan: Kun ichidagi menyu ertalabgi va kechki kontent sonini ko'rsatadi
 @admin_router.callback_query(F.data.startswith("day_"))
 async def day_menu(call: CallbackQuery):
     await call.answer()
     _, c, d = call.data.split("_")
     items = await db.get_day_content_list(c, d)
+    
+    m_count = len([i for i in items if i.get('extra') == 'morning'])
+    e_count = len([i for i in items if i.get('extra') == 'evening'])
+    
     await call.message.edit_text(
-        f"⚙️ <b>{c} {d}-kun</b>\n📂 Fayllar: {len(items)} ta",
+        f"⚙️ <b>{c} {d}-kun</b>\n"
+        f"🌅 Ertalabgi fayllar: {m_count} ta\n"
+        f"🌃 Kechki fayllar: {e_count} ta",
         reply_markup=day_actions_kb(c, d),
         parse_mode="HTML"
     )
 
+# Tahrirlangan: Ko'rish rejimida kontent vaqtiga qarab ajratib ko'rsatiladi
 @admin_router.callback_query(F.data.startswith("view_"))
 async def view_c(call: CallbackQuery, bot: Bot):
     await call.answer()
     _, c, d = call.data.split("_")
     items = await db.get_day_content_list(c, d)
-    chan = os.getenv(f"{c}_CHANNEL")
+    chan_raw = os.getenv(f"{c}_CHANNEL")
+
+    if not chan_raw:
+        return await call.message.answer("❌ Kanal ID si .env faylida topilmadi.")
+
+    # String qiymatni int ga o'girish
+    try:
+        chan = int(chan_raw) if chan_raw.replace("-", "").isdigit() else chan_raw
+    except ValueError:
+        chan = chan_raw
 
     if not items:
         return await call.answer("Bo'sh!", show_alert=True)
 
-    await call.message.answer(f"👁 <b>{c} {d}-kun</b>:", parse_mode="HTML")
+    await call.message.answer(f"👁 <b>{c} {d}-kun Kontenti</b>:", parse_mode="HTML")
     for i in items:
+        time_label = "🌅 Ertalabgi" if i.get('extra') == 'morning' else "🌃 Kechki" if i.get('extra') == 'evening' else "📌 Umumiy"
         try:
-            await bot.copy_message(call.from_user.id, chan, int(i['file_id']))
-        except Exception:
-            pass
+            await call.message.answer(f"{time_label} fayl:", parse_mode="HTML")
+            await bot.copy_message(chat_id=call.from_user.id, from_chat_id=chan, message_id=int(i['file_id']))
+        except Exception as e:
+            await call.message.answer(f"⚠️ {i['file_id']}-ID lik faylni yuklashda xatolik.\nSabab: {e}")
 
 @admin_router.callback_query(F.data.startswith("clear_"))
 async def clear_c(call: CallbackQuery):
@@ -460,17 +491,24 @@ async def clear_c(call: CallbackQuery):
     await call.answer("Tozalandi", show_alert=True)
     await day_menu(call)
 
+# Tahrirlangan: Ertalab yoki Kechki media qo'shish callback funksiyasi
 @admin_router.callback_query(F.data.startswith("add_"))
 async def add_c(call: CallbackQuery, state: FSMContext):
     await call.answer()
-    _, c, d = call.data.split("_")
-    await state.update_data(c=c, d=d)
+    parts = call.data.split("_")
+    c = parts[1]
+    d = parts[2]
+    time_of_day = parts[3] if len(parts) > 3 else "morning" # agar eskicha chaqirilsa morning ishlaydi
+
+    await state.update_data(c=c, d=d, time_of_day=time_of_day)
     try:
         await call.message.delete()
     except Exception:
         pass
+        
+    t_label = "🌅 ERTALABGI" if time_of_day == "morning" else "🌃 KECHKI"
     await call.message.answer(
-        f"📥 <b>{c} {d}-kun</b>. Media yuboring.\nTugatgach '✅ TUGATISH' bosing.",
+        f"📥 <b>{c} {d}-kun ({t_label})</b>.\nShu vaqt uchun kerakli mediani yuboring.\nTugatgach '✅ TUGATISH' bosing.",
         reply_markup=finish_upload_kb(),
         parse_mode="HTML"
     )
@@ -480,50 +518,59 @@ async def add_c(call: CallbackQuery, state: FSMContext):
 async def upload_loop(message: types.Message, state: FSMContext, bot: Bot):
     if message.text == "🔙 Bekor qilish":
         await state.clear()
-        await message.answer("Bekor qilindi", reply_markup=admin_home_kb())
-        return
+        return await message.answer("Bekor qilindi", reply_markup=admin_home_kb())
 
     if message.text == "✅ TUGATISH":
         await state.clear()
-        await message.answer("✅ Saqlandi.", reply_markup=admin_home_kb())
-        return
+        return await message.answer("✅ Saqlandi.", reply_markup=admin_home_kb())
 
-    data = await state.get_data()
-    chan = os.getenv(f"{data['c']}_CHANNEL")
-    if not chan:
-        return await message.answer(f"❌ .env da {data['c']}_CHANNEL topilmadi.")
-
+    # Ruxsat etilgan media turlarini filtrlash
     allowed = any([message.video, message.photo, message.voice, message.text, message.document, message.audio])
     if not allowed:
-        return await message.answer("⚠️ Faqat text, photo, video, voice, audio yoki document yuboring.")
+        return await message.answer("⚠️ Faqat matn, rasm, video, ovoz, audio yoki hujjat yuboring.")
+
+    data = await state.get_data()
+    chan_raw = os.getenv(f"{data['c']}_CHANNEL")
+    
+    if not chan_raw:
+        return await message.answer(f"❌ .env da <b>{data['c']}_CHANNEL</b> topilmadi.", parse_mode="HTML")
+
+    # Kanal ID formatini xavfsiz to'g'irlash
+    try:
+        chan = int(chan_raw) if chan_raw.replace("-", "").isdigit() else chan_raw
+    except ValueError:
+        chan = chan_raw
 
     try:
-        sent = await bot.copy_message(chan, message.chat.id, message.message_id)
+        # Mediadan nusxani bazaviy kanalga yuborish
+        sent = await bot.copy_message(chat_id=chan, from_chat_id=message.chat.id, message_id=message.message_id)
 
-        if message.video:
-            c_type = "video"
-        elif message.photo:
-            c_type = "photo"
-        elif message.voice:
-            c_type = "voice"
-        elif message.audio:
-            c_type = "audio"
-        elif message.document:
-            c_type = "document"
-        else:
-            c_type = "text"
+        c_type = "text"
+        if message.video: c_type = "video"
+        elif message.photo: c_type = "photo"
+        elif message.voice: c_type = "voice"
+        elif message.audio: c_type = "audio"
+        elif message.document: c_type = "document"
 
+        # Tahrirlangan: oxirgi parametr sifatida data['time_of_day'] ("morning" yoki "evening") yuboriladi
         await db.add_content_item(
             data['c'],
             data['d'],
             c_type,
             str(sent.message_id),
             message.caption or message.text or "Dars",
-            ""
+            data.get('time_of_day', 'morning')
         )
-        await message.answer("✅ Qo'shildi. Yana yuboring...")
+        
+        await message.reply("✅ Qo'shildi. Keyingi mediani yuboring yoki '✅ TUGATISH' tugmasini bosing.")
+        
     except Exception as e:
-        await message.answer(f"❌ Xato: {e}")
+        await message.answer(
+            f"❌ <b>Kanalga saqlashda xatolik!</b>\n"
+            f"Sabab: <code>{e}</code>\n"
+            f"❗️ Bot <code>{chan}</code> ID lik kanalga Admin qilinganligiga ishonch hosil qiling.",
+            parse_mode="HTML"
+        )
 
 # ==========================================================
 #              7. QIDIRUV VA STATISTIKA
@@ -546,6 +593,8 @@ async def search_ask(message: types.Message, state: FSMContext):
 async def search_process(message: types.Message, state: FSMContext):
     if message.text == "🔙 Asosiy Menyu":
         return await back_to_home(message, state)
+    if not message.text:
+        return await message.answer("Iltimos, matn kiriting.")
 
     user = await db.search_user_universal(message.text)
     if not user:
@@ -638,6 +687,9 @@ async def manual_ask(message: types.Message, state: FSMContext):
 async def manual_save(message: types.Message, state: FSMContext):
     if message.text == "🔙 Asosiy Menyu":
         return await back_to_home(message, state)
+    if not message.text:
+        return await message.answer("Ssilkani matn shaklida yuboring.")
+    
     await db.save_manual_link(message.text)
     await message.answer("✅ <b>Qo'llanma linki yangilandi!</b>", reply_markup=admin_home_kb(), parse_mode="HTML")
     await state.clear()
@@ -658,9 +710,9 @@ async def broadcast_msg(message: types.Message, state: FSMContext):
         return await back_to_home(message, state)
 
     target = "ALL"
-    if "Faol" in message.text:
+    if message.text and "Faol" in message.text:
         target = "ACTIVE"
-    elif "Tasdiqlan" in message.text:
+    elif message.text and "Tasdiqlan" in message.text:
         target = "PENDING_APPROVAL"
 
     await state.update_data(target=target)
@@ -698,7 +750,7 @@ async def broadcast_send(message: types.Message, state: FSMContext, bot: Bot):
             )
             msg_count += 1
         except Exception:
-            pass
+            pass 
 
     await message.answer(
         f"✅ <b>Muvaffaqiyatli yuborildi:</b> {msg_count} ta userga.",
